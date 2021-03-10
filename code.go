@@ -54,16 +54,16 @@ var nameCodes map[string]Bits = map[string]Bits{
 	"v":      VERB,
 	"va":     V_AFFIX,
 	"vi":     V_IRREG,
-	"y":      _Y,
+	"y":      Y,
 }
 
 // Converts a comma-separated string of Bits identifiers to Bits
 func strToCode(s string) (Bits, error) {
-	code := Bits{0}
-	for _, name := range strings.Split(strings.Trim(s), ",") {
-		b, err := nameCodes[name]
-		if err != nil {
-			return code, fmt.Errorf("Unknown affix code \"%s\"\n%v", name, err)
+	var code Bits = 0
+	for _, name := range strings.Split(strings.TrimSpace(s), ",") {
+		b, ok := nameCodes[name]
+		if !ok {
+			return code, fmt.Errorf("Unknown affix code \"%s\"\n", name)
 		}
 		code = code | b
 	}

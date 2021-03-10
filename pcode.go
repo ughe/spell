@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 )
 
 type dict struct {
@@ -23,13 +25,11 @@ func fatalf(format string, a ...interface{}) {
 func main() {
 	words := make([]dict, 0, 200000)
 	encodes := make([]Bits, 0, 2048) // Max size 2^11 (11 bit binary format)
+	var err error
 
 	if len(os.Args) <= 1 {
-		b, err := bufio.NewScanner(os.Stdin)
-		if err != nil {
-			fatalf("%v\n", err)
-		}
-		words, encodes, err = readWordEncodings(words, encodes, b)
+		s := bufio.NewScanner(os.Stdin)
+		words, encodes, err = readWordEncodings(words, encodes, s)
 		if err != nil {
 			fatalf("%v\n", err)
 		}
@@ -40,30 +40,25 @@ func main() {
 		if err != nil {
 			fatalf("Cannot open %s\n%v\n", path, err)
 		}
-		b, err := bufio.NewScanner(f)
-		if err != nil {
-			fatalf("%v\n", err)
-		}
-		words, encodes, err = readWordEncodings(words, encodes, b)
+		s := bufio.NewScanner(f)
+		words, encodes, err = readWordEncodings(words, encodes, s)
 		if err != nil {
 			fatalf("%v\n", err)
 		}
 	}
 
-	err = writeDict(words, encoded)
-	if err != nil {
-		fatalf(err)
+	if err := writeDict(words, encodes); err != nil {
+		fatalf("%v\n", err)
 	}
 }
 
-func readWordEncodings(words []dict, encodes []Bits, b *bufio.Scanner) (words []dict, encodes []Bits, err error) {
+func readWordEncodings(words []dict, encodes []Bits, s *bufio.Scanner) ([]dict, []Bits, error) {
 
-	for b.Scan() {
+	for s.Scan() {
 		line := s.Text()
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
-			err := fmt.Errorf("Expected 2 words in a line. Found %d for: \"%v\"\n", len(fields), line)
-			return
+			return nil, nil, fmt.Errorf("Expected 2 words in a line. Found %d for: \"%v\"\n", len(fields), line)
 		}
 		word := fields[0]
 		affixes := fields[1]
@@ -71,11 +66,11 @@ func readWordEncodings(words []dict, encodes []Bits, b *bufio.Scanner) (words []
 		// Find index of Bits in encodes, or add if code does not exist
 		code, err := strToCode(affixes)
 		if err != nil {
-			return
+			return nil, nil, err
 		}
 		var c Bits
-		var i uint16
-		for i, d = range encodes {
+		var i int
+		for i, c = range encodes {
 			if c == code {
 				break
 			}
@@ -85,24 +80,26 @@ func readWordEncodings(words []dict, encodes []Bits, b *bufio.Scanner) (words []
 		}
 
 		// Accumulate the word and encoding index
-		words = append(words, dict{word: word, i: i})
+		words = append(words, dict{word: word, i: uint16(i)})
 	}
 	err := s.Err()
 
 	fmt.Fprintf(os.Stderr, "words = %d; codes = %d\n", len(words), len(encodes))
-	return
+	return words, encodes, err
 }
 
-func sput(b *bufio.Writer, bits uint16) (err error) {
+func sput(b *bufio.Writer, bits uint16) error {
 	buf := make([]byte, 2)
 	binary.BigEndian.PutUint16(buf, bits)
-	_, err = b.Write(buf)
+	_, err := b.Write(buf)
+	return err
 }
 
-func lput(b *bufio.Writer, bits uint32) (err error) {
+func lput(b *bufio.Writer, bits uint32) error {
 	buf := make([]byte, 4)
-	binary.BigEndian.PutUint16(buf, bits)
-	_, err = b.Write(buf)
+	binary.BigEndian.PutUint32(buf, bits)
+	_, err := b.Write(buf)
+	return err
 }
 
 // spit out the encoded dictionary
@@ -120,7 +117,7 @@ func lput(b *bufio.Writer, bits uint32) (err error) {
 // 0x8000 flag for code word
 // 0x7800 count of number of common bytes with previous word
 // 0x07ff index into codes array for affixes
-func writeDict(words []dict, encodes []uint32) error {
+func writeDict(words []dict, encodes []Bits) error {
 	sort.Slice(words, func(i, j int) bool {
 		return words[i].word < words[j].word
 	})
@@ -128,23 +125,23 @@ func writeDict(words []dict, encodes []uint32) error {
 	f := bufio.NewWriter(os.Stdout)
 	defer f.Flush()
 
-	if err := sput(f, len(encodes)); err != nil {
+	if err := sput(f, uint16(len(encodes))); err != nil {
 		return err
 	}
 	for _, c := range encodes {
-		if err := lput(f, c); err != nil {
+		if err := lput(f, uint32(c)); err != nil {
 			return err
 		}
 	}
 
 	nBytes := 2 + 4*len(encodes)
 	last := ""
-	for i, word := range words {
+	for _, word := range words {
 		var j int
-		for j = 0; j < len(word) && j < len(last) && word[j] == last[j]; j++ {
+		for j = 0; j < len(word.word) && j < len(last) && word.word[j] == last[j]; j++ {
 		}
-		if word == last {
-			fmt.Fprintf(os.Stderr, "identical words: %s\n", word)
+		if word.word == last {
+			fmt.Fprintf(os.Stderr, "identical words: %s\n", word.word)
 		}
 
 		// j must fit inside 4 bits. 2^4-1 == 15
@@ -153,7 +150,7 @@ func writeDict(words []dict, encodes []uint32) error {
 		}
 
 		// Code Index (11 bits) | Common char count (4 bits) | High (1 bit)
-		c := (word.i & 0x07FF) | ((j << 11) & 0x7800) | ((1 << 15) & 0x8000)
+		c := (word.i & uint16(0x07FF)) | uint16(((j<<11)&0x7800)|((1<<15)&0x8000))
 		if err := sput(f, c); err != nil {
 			return nil
 		}
@@ -161,10 +158,11 @@ func writeDict(words []dict, encodes []uint32) error {
 		nBytes += 2
 
 		// Write unique part of word
-		if _, err := b.Write([]byte(word[j:])); err != nil {
+		if _, err := f.Write([]byte(word.word[j:])); err != nil {
 			return err
 		}
 
-		last = word
+		last = word.word
 	}
+	return nil
 }
