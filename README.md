@@ -7,14 +7,13 @@ Transliteration of [v10spell](https://github.com/arnoldrobbins/v10spell) from C 
 ## Example
 
 ```
-rm -f generate.go spell.go
 go install ./...
 cd dictionaries
 pcode list british local stop  > brspell
 pcode list american local stop > amspell
 ```
 
-Outputs `amspell` and `brspell` along with `stderr`:
+Outputs `brspell` and `amspell` along with `stderr`:
 
 ```
 words = 31287; codes = 285

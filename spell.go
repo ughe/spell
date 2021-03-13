@@ -4,38 +4,28 @@ package spell
 // https://ieeexplore.ieee.org/iel5/26/23952/01095395.pdf
 // https://github.com/arnoldrobbins/v10spell
 
-import (
-	"encoding/csv"
-	"io/ioutil"
-)
+type prefix struct {
+	s    string
+	flag bits
+}
 
-type bits uint32
+type suffix struct {
+	s         string
+	p1        op
+	n1        int
+	d1        string
+	a1        string
+	flag      bits
+	affixable bits
+	p2        op
+	n2        int
+	d2        string
+	a2        string
+}
 
 func pair(a, b uint8) bits {
 	return (bits(a) << 8) | bits(b)
 }
 
-// Unknown
 const dLEV = 2
-const dSIZ = 40
-
-// Prefix
-type pretab struct {
-	s string
-	f int
-}
-
-// Suffix
-type suftab struct {
-	s string
-}
-
-func init() {
-	// 1. Read prefixes.go CSV
-	buf, err := ioutil.ReadFile(imageFilename)
-	if err != nil {
-		return err
-	}
-	// 2. Turn them into preftab
-	prefixTable := make([][]pretab, int('a')-int('z')+1)
-}
+const dSIZ = 40 // Deriv Size
