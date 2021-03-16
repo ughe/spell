@@ -39,7 +39,7 @@ func Pcode() {
 	for _, path := range os.Args[1:] {
 		f, err := os.Open(path)
 		if err != nil {
-			fatalf("Cannot open %s\n%v\n", path, err)
+			fatalf("cannot open %s\n%v\n", path, err)
 		}
 		defer f.Close()
 		s := bufio.NewScanner(f)
@@ -50,7 +50,7 @@ func Pcode() {
 	}
 	fmt.Fprintf(os.Stderr, "words = %d; codes = %d\n", len(words), len(encodes))
 
-	nBytes, err := writeDict(words, encodes)
+	nBytes, err := writeDict(words, encodes, os.Stdout)
 	if err != nil {
 		fatalf("%v\n", err)
 	}
@@ -134,12 +134,12 @@ func lput(b *bufio.Writer, bits uint32) error {
 // 0x8000 flag for code word
 // 0x7800 count of number of common bytes with previous word
 // 0x07ff index into codes array for affixes
-func writeDict(words []dict, encodes []bits) (int, error) {
+func writeDict(words []dict, encodes []bits, w io.Writer) (int, error) {
 	sort.Slice(words, func(i, j int) bool {
 		return words[i].word < words[j].word
 	})
 
-	f := bufio.NewWriter(os.Stdout)
+	f := bufio.NewWriter(w)
 	defer f.Flush()
 
 	if err := sput(f, uint16(len(encodes))); err != nil {
@@ -221,31 +221,78 @@ func readDict(path string) ([]dict, []bits, error) {
 	}
 
 	words := make([]dict, 0, nencode) // At least nencode words
+	var spacep [128 * 128]*byte       // pointer to words starting with "xx"
+	var space [300000]byte
 
-	// Need to use ascii currently
+	var s *byte = &space[0]
+	var lasts *byte
+	sp := -1 // Index into spacep: Previous
+	i := 0   // Index into spacep: Next
 
-	for {
-		c, err := sread(r)
-		if err != nil {
-			if err == io.EOF {
-				break
-			} else {
-				fatalf("spell: trouble reading %s\n", path)
-			}
+	c, err := r.ReadByte()
+	for err == nil {
+		j := (c >> 3) & 0xF // j aka p aka # repeated characters
+		// copy 2 bytes into space buffer
+		*s = c
+		s++
+		if *s, err = r.ReadByte(); err != nil {
+			break
 		}
-		i := uint16(c & 0x07FF) // encodes index lookup
-		j := (c & 0x7800) >> 11 // length of common prefix with previous word
-		// highBit := (c & 0x8000) >> 15
+		s++
 
-		remainder := ""
-		// for k := 0; k < j; k
-		// TODO: TODO
-		k := 1
+		// Lookup the correct index i in spacep using j (# repeated chars)
+		if j == 0 { // invariant: j >= 0
+			if c, err = r.ReadByte(); err != nil {
+				break
+			}
+			i = int(c) * 128 // Points first x in "xx" to char c
+		} else if j == 1 {
+			if c, err = r.ReadByte(); err != nil {
+				break
+			}
+			if c&0x80 == 0 {
+				i = i/128*128 + int(c) // Points second x in "xx" to char c
+			}
+			if i <= sp {
+				fatalf("spell: the dict isn't sorted")
+			}
+			for sp < i {
+				sp++
+				spacep[sp] = s - 2 // entry starts before last two bytes coppied in
+			}
+		} // else j >= 2 therefore i already points to correct "xx" location
 
-		word := words[k-1].word[:j] + remainder
-		words = append(words, dict{word: word, i: i})
+		ls := lasts // beginning of the last word
+		lasts = s   // beginning of the new last word in the space buffer
 
+		// copy repeated chars (can skip first 2 which are "xx" index in spacep)
+		for j = j - 2; j > 0; j-- {
+			*s = *ls
+			s++
+			ls++
+		}
+
+		// copy non-repeated chars
+		for {
+			if c, err = r.ReadByte(); err != nil {
+				break // breaks two loops since err != nil
+			}
+			if c & 0x80 {
+				break
+			}
+			*s = c
+			s++
+		}
+
+		*s = 0
+	}
+	if err != io.EOF {
+		fatalf("spell: trouble reading %s\n%v", path, err)
 	}
 
-	return words, encodes, nil
+	for ; sp < len(spacep); sp++ {
+		spacep[sp] = s
+	}
+
+	return spacep, space, nil
 }
