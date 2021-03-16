@@ -11,8 +11,8 @@ import (
 )
 
 type dict struct {
+	i    uint16 // (i & 0x07FF) is index of encodes (type []bits)
 	word string
-	i    uint16 // index of bits encoding in encodes slice
 }
 
 func fatalf(format string, a ...interface{}) {
@@ -197,7 +197,7 @@ func writeDict(words []dict, encodes []bits, w io.Writer) (int, error) {
 // first two letters of each word are deleted and found
 // instead by lookup in table spacep, which points to the
 // first word for each two-letter prefix.
-func readDict(path string) ([]dict, []bits, error) {
+func readDict(path string) ([]dict, [128 * 128]*dict, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		fatalf("spell: cannot open %s\n", path)
@@ -220,79 +220,73 @@ func readDict(path string) ([]dict, []bits, error) {
 		}
 	}
 
-	words := make([]dict, 0, nencode) // At least nencode words
-	var spacep [128 * 128]*byte       // pointer to words starting with "xx"
-	var space [300000]byte
+	space := make([]dict, 0, nencode) // sorted words (first two letters deleted)
+	var spacep [128 * 128]*dict       // pointer to words starting with "xx"
 
-	var s *byte = &space[0]
-	var lasts *byte
-	sp := -1 // Index into spacep: Previous
-	i := 0   // Index into spacep: Next
+	var lasts *string // previous word
+	var s *string     // current word
 
-	c, err := r.ReadByte()
+	sp := -1 // previous index into spacep
+	i := 0   // current index into spacep
+
 	for err == nil {
-		j := (c >> 3) & 0xF // j aka p aka # repeated characters
-		// copy 2 bytes into space buffer
-		*s = c
-		s++
-		if *s, err = r.ReadByte(); err != nil {
+		head, err := sread(r) // LSB 11b | 4b | 1b MSB for index and repeated chars
+		if err != nil {
 			break
 		}
-		s++
+		j := (int(head) & 0x7800) >> 11 // num repeated chars (called p in v10 src)
 
-		// Lookup the correct index i in spacep using j (# repeated chars)
-		if j == 0 { // invariant: j >= 0
-			if c, err = r.ReadByte(); err != nil {
+		space = append(space, dict{i: head, word: ""})
+		d := &space[len(space)-1]
+		s = &d.word
+
+		// Need to update the spacep prefix mapping if the number of repeated
+		// characters is less than two. TODO: What happens if word has only 1 char?
+		if j <= 0 { // invariant: j >= 0
+			c, err := r.ReadByte()
+			if err != nil {
 				break
 			}
-			i = int(c) * 128 // Points first x in "xx" to char c
-		} else if j == 1 {
-			if c, err = r.ReadByte(); err != nil {
+			i = int(c) * 128 // Points first x in "xx"
+		}
+		if j <= 1 {
+			c, err := r.ReadByte()
+			if err != nil {
 				break
 			}
-			if c&0x80 == 0 {
-				i = i/128*128 + int(c) // Points second x in "xx" to char c
+			if c&0x80 == 0 { // works since c is ASCII otherwise is 11b|4b|1b enc
+				i = i/128*128 + int(c) // Points second x in "xx"
 			}
 			if i <= sp {
 				fatalf("spell: the dict isn't sorted")
 			}
 			for sp < i {
 				sp++
-				spacep[sp] = s - 2 // entry starts before last two bytes coppied in
+				spacep[sp] = d
 			}
-		} // else j >= 2 therefore i already points to correct "xx" location
-
-		ls := lasts // beginning of the last word
-		lasts = s   // beginning of the new last word in the space buffer
+		} // else j >= 2 therefore sp already points to correct "xx" location
 
 		// copy repeated chars (can skip first 2 which are "xx" index in spacep)
-		for j = j - 2; j > 0; j-- {
-			*s = *ls
-			s++
-			ls++
-		}
+		*s += (*lasts)[:j-2]
 
 		// copy non-repeated chars
 		for {
-			if c, err = r.ReadByte(); err != nil {
+			c, err := r.ReadByte()
+			if err != nil {
 				break // breaks two loops since err != nil
 			}
-			if c & 0x80 {
+			if c&0x80 != 0 { // Not ASCII; part of the encoding
+				err = r.UnreadByte()
 				break
 			}
-			*s = c
-			s++
+			*s += string(c)
 		}
 
-		*s = 0
+		lasts = s
 	}
 	if err != io.EOF {
 		fatalf("spell: trouble reading %s\n%v", path, err)
 	}
 
-	for ; sp < len(spacep); sp++ {
-		spacep[sp] = s
-	}
-
-	return spacep, space, nil
+	return space, spacep, nil
 }

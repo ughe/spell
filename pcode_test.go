@@ -1,7 +1,12 @@
 package spell
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"reflect"
 	"testing"
 )
 
@@ -34,33 +39,31 @@ func TestWriteDict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed writeDict with err: %v", err)
 	}
-	if nBytes != len(buf) {
-		t.Fatalf("writeDict nBytes != len(buf). (%d != %d)", nBytes, len(buf))
+	if nBytes != buf.Len() {
+		t.Fatalf("writeDict nBytes != buf.Len(). (%d != %d)", nBytes, buf.Len())
 	}
 
 	wordsPrime, encodesPrime, err := readDictTesting(&buf)
+	if err != nil {
+		t.Fatalf("readDictTesting err: %v", err)
+	}
 	if !reflect.DeepEqual(words, wordsPrime) {
 		t.Fatalf("input of writeDict != output of readDictTesting (words)")
 	}
 	if !reflect.DeepEqual(encodes, encodesPrime) {
 		t.Fatalf("input of writeDict != output of readDictTesting (encodes)")
 	}
+	t.Logf("[INFO] %d words and %d encodings\n", len(words), len(encodes))
 }
 
 // Returns words and encodings given the output of writeDict
 // Performs the opposite operation of writeDict. For testing purposes
 func readDictTesting(rd io.Reader) ([]dict, []bits, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer f.Close()
-
-	r := bufio.NewReader(f)
+	r := bufio.NewReader(rd)
 
 	nencode16, err := sread(r)
 	if err != nil {
-		fatalf("spell: trouble reading %s\n", path)
+		return nil, nil, err
 	}
 	nencode := int(nencode16)
 	encodes := make([]bits, nencode)
@@ -68,7 +71,7 @@ func readDictTesting(rd io.Reader) ([]dict, []bits, error) {
 		code, err := lread(r)
 		encodes[i] = bits(code)
 		if err != nil {
-			fatalf("spell: trouble reading %s\n", path)
+			return nil, nil, err
 		}
 	}
 
@@ -81,26 +84,26 @@ func readDictTesting(rd io.Reader) ([]dict, []bits, error) {
 			if err == io.EOF {
 				break
 			} else {
-				fatalf("spell: trouble reading %s\n", path)
+				return nil, nil, err
 			}
 		}
 		i := uint16(c & 0x07FF) // encodes index lookup
 		j := (c & 0x7800) >> 11 // length of common prefix with previous word
 		if c&0x8000 == 0 {
-			fatalf("spell: trouble reading %s (invariant violation)\n", path)
+			return nil, nil, fmt.Errorf("Invariant violation. 0x8000 should be high")
 		}
 
 		remainder := ""
 		b, err := r.ReadByte()
-		for ; b&0x8000 == 0 && err == nil; b, err = r.ReadByte() {
-			remainder += rune(b)
+		for ; b&0x80 == 0 && err == nil; b, err = r.ReadByte() {
+			remainder += string(b)
 		}
-		if err == nil && err != io.EOF {
-			fatalf("spell: trouble reading %s\n", path)
+		if err != nil && err != io.EOF {
+			return nil, nil, err
 		}
-		if b&0x8000 != 0 {
+		if b&0x80 != 0 {
 			if err := r.UnreadByte(); err != nil {
-				fatalf("spell: trouble reading %s (%v)\n", path, err)
+				return nil, nil, err
 			}
 		}
 
