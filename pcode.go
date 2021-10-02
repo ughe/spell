@@ -197,7 +197,7 @@ func writeDict(words []dict, encodes []bits, w io.Writer) (int, error) {
 // first two letters of each word are deleted and found
 // instead by lookup in table spacep, which points to the
 // first word for each two-letter prefix.
-func readDict(path string) ([]dict, [128 * 128]*dict, error) {
+func readDict(path string) ([]dict, [128 * 128]*dict) {
 	f, err := os.Open(path)
 	if err != nil {
 		fatalf("spell: cannot open %s\n", path)
@@ -288,5 +288,5 @@ func readDict(path string) ([]dict, [128 * 128]*dict, error) {
 		fatalf("spell: trouble reading %s\n%v", path, err)
 	}
 
-	return space, spacep, nil
+	return space, spacep
 }
